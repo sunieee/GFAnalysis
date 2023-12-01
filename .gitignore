@@ -1,0 +1,5 @@
+out/*
+!out/top_authors.csv
+!out/authors.csv
+!out/fellow.csv
+!out/fellow.txt
