@@ -5,16 +5,14 @@ import multiprocessing
 from tqdm import tqdm
 import json
 
-df_paper_reference = pd.read_csv(f"{path}/paper_reference.csv")
-df_paper_reference['citingpaperID'] = df_paper_reference['citingpaperID'].astype(str)
-df_paper_reference['citedpaperID'] = df_paper_reference['citedpaperID'].astype(str)
-
 # 直接从paper_reference表中筛选出自引的记录
 print('creating node & edges', datetime.datetime.now().strftime("%H:%M:%S"))
-
 if not os.path.exists(f'out/edges.csv'):
     print('edges.csv not found, creating self-reference graph...')
     t = time.time()
+    df_paper_reference = pd.read_csv(f"{path}/paper_reference.csv")
+    df_paper_reference['citingpaperID'] = df_paper_reference['citingpaperID'].astype(str)
+    df_paper_reference['citedpaperID'] = df_paper_reference['citedpaperID'].astype(str)
     # 使用两次 merge 来模拟 SQL 中的 join 操作    
     merged_df1 = df_paper_reference.merge(df_paper_author, left_on='citingpaperID', right_on='paperID')
     merged_df2 = merged_df1.merge(df_paper_author.rename(columns={'authorID': 'authorID2', 'paperID': 'paperID2'}), 
@@ -25,6 +23,9 @@ if not os.path.exists(f'out/edges.csv'):
     edges = edges[['authorID', 'citingpaperID', 'citedpaperID']]
     edges.drop_duplicates(inplace=True)
     edges.to_csv(f'out/edges.csv', index=False)
+    df_paper_reference = None
+    merged_df1 = None
+    merged_df2 = None
     print(f'edges created, time cost:', time.time()-t)
 else:   
     edges = pd.read_csv(f'out/edges.csv')
@@ -70,12 +71,13 @@ else:
     paperID2year = dict(zip(df_papers['paperID'].tolist(), df_papers['PublicationDate'].apply(lambda x: x.year).tolist()))
 
     citingpaperID_list = [paperID for paperID in df_paper_reference['citingpaperID'].drop_duplicates().tolist() if paperID not in paperID2year]
-
+    print('extracting citingpaper years', len(citingpaperID_list))
     multiproces_num = 20
     group_size = 2000
     group_length = math.ceil(len(citingpaperID_list)/group_size)
     groups = [(citingpaperID_list[i*group_size:i*group_size+group_size], f'{i}/{group_length}') for i in range(group_length)]
     with multiprocessing.Pool(processes=multiproces_num) as pool:
+        print('start pool')
         results = pool.map(getYear, groups)
         for result in results:
             paperID2year.update(result)
@@ -84,15 +86,37 @@ else:
         json.dump(paperID2year, f)
 
 
+if os.path.exists('out/node2citingpaperIDs.json'):
+    node2citingpaperIDs = json.load(open('out/node2citingpaperIDs.json'))
+else:
+    df_paper_reference = pd.read_csv(f"{path}/paper_reference.csv")
+    df_paper_reference['citingpaperID'] = df_paper_reference['citingpaperID'].astype(str)
+    df_paper_reference['citedpaperID'] = df_paper_reference['citedpaperID'].astype(str)
+    #######################################################3
+    # 这是关键路径！！优化前： 50h 优化后： 1min
+    # 首先，筛选出仅包含在 nodes 中的 citedpaperID
+    df_filtered = df_paper_reference[df_paper_reference['citedpaperID'].isin(nodes)]
+    # 然后，使用 groupby 创建一个按 'citedpaperID' 分组的字典
+    print('grouping by citedpaperID', datetime.datetime.now().strftime("%H:%M:%S"))
+    grouped_data = df_filtered.groupby('citedpaperID')['citingpaperID']
+    grouped_dict = {}
+    for name, group in tqdm(grouped_data):
+        grouped_dict[name] = group.tolist()
+    # 最后，创建 node 到 citingpaperID 的映射
+    node2citingpaperIDs = {node: grouped_dict.get(node, []) for node in nodes}
+    df_paper_reference = None
+    grouped_data = None
+    grouped_dict = None
+    with open('out/node2citingpaperIDs.json', 'w') as f:
+        json.dump(node2citingpaperIDs, f)
+
 
 def getTimeseries(paperIDs):
     data = []
-    conn, cursor = create_connection()
     for paperID in tqdm(paperIDs):
-        print(paperID)
-        citing_papers = df_paper_reference[df_paper_reference['citedpaperID'] == paperID]['citingpaperID'].tolist()
+        # print(paperID)
         # 不仅包含作者自己的引用，还有其他作者的引用!!!
-        citing_years = [paperID2year[paperID] for paperID in citing_papers]
+        citing_years = [paperID2year[paperID] for paperID in node2citingpaperIDs[paperID]]
         if len(citing_years) == 0:
             continue
 
@@ -108,9 +132,8 @@ def getTimeseries(paperIDs):
     return data
 
 
-if os.path.exists('out/timeseries.csv'):
-    timeseries_df = pd.read_csv('out/timeseries.csv')
-else:
+# key为paperID，value为paperID对应的 [citeStartYear, citeEndYear, totalCitationCount, citationCountByYear]
+if not os.path.exists('out/timeseries.csv'):
     print('creating timeseries', datetime.datetime.now().strftime("%H:%M:%S"))
     t = time.time()
     multiproces_num = 20
@@ -124,10 +147,6 @@ else:
     timeseries_df.to_csv('out/timeseries.csv', index=False)
     print('timeseries created, time cost:', time.time()-t)
 
-timeseries_df['paperID'] = timeseries_df['paperID'].astype(str)
-# key为paperID，value为paperID对应的 [citeStartYear, citeEndYear, totalCitationCount, citationCountByYear]
-
-df_paper_reference = None
 
 '''
 loading data from database 21:06:37

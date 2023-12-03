@@ -7,16 +7,15 @@ import json
 import multiprocessing
 
 
-database = os.environ.get('database', 'scigene_visualization_field')
 def create_connection(database):
     conn = pymysql.connect(host='localhost',
-                                user=os.environ.get('user'),
-                                password=os.environ.get('password'),
-                                db=database,
-                                charset='utf8')
+                            user='root',
+                            password='root',
+                            db=database,
+                            charset='utf8')
     return conn, conn.cursor()
 
-edge_df = pd.read_csv(f'out/{database}/edge_proba.csv')
+edge_df = pd.read_csv(f'out/edge_proba.csv')
 for col in ['citingpaperID', 'citedpaperID', 'authorID']:
     edge_df[col] = edge_df[col].astype(str)
 authorID_list = edge_df['authorID'].unique()
@@ -37,9 +36,9 @@ def fetch_citation_context(pairs):
     return dic
         
 
-if os.path.exists(f'out/{database}/citation_context.json'):
+if os.path.exists(f'out/citation_context.json'):
     print('loading citation context...')
-    with open(f'out/{database}/citation_context.json', 'r') as f:
+    with open(f'out/citation_context.json', 'r') as f:
         citation2context = json.load(f)
 else:
     print('extracting citation context...')
@@ -47,8 +46,9 @@ else:
 
     data = list(zip(edge_df['citingpaperID'], edge_df['citedpaperID']))
     # citation2context = fetch_citation_context(data)
-    with multiprocessing.Pool(processes=10) as pool:
-        results = pool.map(fetch_citation_context, [data[i::10] for i in range(10)])
+    multiprocess_num = multiprocessing.cpu_count()
+    with multiprocessing.Pool(processes=multiprocess_num) as pool:
+        results = pool.map(fetch_citation_context, [data[i::multiprocess_num] for i in range(multiprocess_num)])
     citation2context = {}
     for result in results:
         citation2context.update(result)
@@ -59,7 +59,7 @@ else:
     #                                 where citingpaperID in {citingpaperID_list}
     #                                 and citedpaperID in {citedpaperID_list}""", conn)
     print('time cost:', time.time()-t)
-    with open(f'out/{database}/citation_context.json', 'w') as f:
+    with open(f'out/citation_context.json', 'w') as f:
         json.dump(citation2context, f)
 
 def extract_citation_context(authorID):
@@ -69,7 +69,7 @@ def extract_citation_context(authorID):
     df = df[['citingpaperID', 'citedpaperID', 'proba']]
     df.columns = ['childrenID', 'parentID', 'extendsProb']
     df['citationContext'] = df.apply(lambda row: citation2context.get(row['childrenID'] + ',' + row['parentID']), axis=1)
-    df.to_csv(f'out/{database}/links/{authorID}.csv', index=False)
+    df.to_csv(f'out/links/{authorID}.csv', index=False)
 
 with multiprocessing.Pool(processes=20) as pool:
     pool.map(extract_citation_context, authorID_list)
