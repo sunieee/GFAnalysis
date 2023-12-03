@@ -38,6 +38,7 @@ if not os.path.exists(path):
         pd.read_sql_query(f"select * from paper_reference where citedpaperID in ({paperID_str})", conn)
     ])
     df_paper_reference.to_csv(f"{path}/paper_reference.csv", index=False)
+    df_paper_reference = None
 else:
     df_paper_author = pd.read_csv(f"{path}/paper_author.csv")
     df_papers = pd.read_csv(f"{path}/papers.csv")
@@ -48,3 +49,4 @@ else:
 
 df_papers['PublicationDate'] = pd.to_datetime(df_papers['PublicationDate'])
 paperID2year = dict(zip(df_papers['paperID'].tolist(), df_papers['PublicationDate'].apply(lambda x: x.year).tolist()))
+df_authors = None

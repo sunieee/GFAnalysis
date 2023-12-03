@@ -160,7 +160,7 @@ def get_feature_values(db, paperID):
     data = db.loc[db['paperID'] == paperID]
     if data.empty:
         return None, None
-    year = int(data['year'].values[0])
+    year = paperID2year[paperID]
     citation_count = data['citationCount'].values[0]
     if citation_count == -1:
         citation_count = None
@@ -197,52 +197,13 @@ def get_values_from_index(df, index, column_name):
         elif isinstance(result, pd.Series):
             return [result[column_name]]
     return []
-    
-
-# 6 correlation features
-timeseries_df = pd.read_sql_query(f"""select citeStartYear, citeEndYear, totalCitationCount, citationCountByYear, paperID 
-                                  from papers_citation_timeseries
-                                  where paperID in {nodes}""", conn)
-timeseries_df['paperID'] = timeseries_df['paperID'].astype(str)
-
-# key为paperID，value为paperID对应的 [citeStartYear, citeEndYear, totalCitationCount, citationCountByYear]
-paperID2timeseries = {}
-
-def getTimeseries(paperID):
-    if paperID in paperID2timeseries:
-        return paperID2timeseries[paperID]
-    
-    citing_papers = edges_by_cited.loc[paperID]['citingpaperID']
-    if isinstance(citing_papers, pd.Series):
-        citing_papers = citing_papers.tolist()
-    else:
-        citing_papers = [citing_papers]
-
-    # 获取引用论文的出版年份
-    citing_years = [paperID2year[cid] for cid in citing_papers]
-    if not citing_years:
-        return []
-
-    # 计算各个年份的被引用次数
-    year_counts = pd.Series(citing_years).value_counts().sort_index()
-    start_year, end_year = year_counts.index.min(), year_counts.index.max()
-
-    # 初始化一个从起始年份到结束年份的年份列表
-    years = list(range(start_year, end_year + 1))
-    citation_count_by_year = [year_counts.get(year, 0) for year in years]
-
-    # 构建最终的输出列表
-    timeseries = [start_year, end_year, sum(citation_count_by_year), ','.join(map(str, citation_count_by_year))]
-    return timeseries
 
 
 # 5 other features
 papers_df = df_papers[df_papers['paperID'].isin(nodes)]
 paper_author_df = df_paper_author[df_paper_author['paperID'].isin(nodes)]
 
-similarity_df = pd.read_csv(f'out/{database}/similarity_features.csv')
-similarity_df.pop('title')
-similarity_df.pop('abstract')
+similarity_df = pd.read_csv(f'out/similarity_features.csv')
 similarity_df['paperID'] = similarity_df['paperID'].astype(str)
 similarity_df.set_index('paperID', inplace=True)
 
@@ -264,12 +225,13 @@ def extract_feature_by_index(i):
     citing = row['citingpaperID']
     cited = row['citedpaperID']
     
-    citingRow = getTimeseries(citing)
-    citedRow = getTimeseries(cited)
-    if not citingRow or not citedRow:
+    citingRow = timeseries_df.loc[timeseries_df['paperID'] == citing].values.tolist()
+    citedRow = timeseries_df.loc[timeseries_df['paperID'] == cited].values.tolist()
+
+    if len(citingRow)==0 or len(citedRow)==0:
         feature = {}
     else:
-        feature = computeFeatures(citingRow, citedRow)
+        feature = computeFeatures(citingRow[0], citedRow[0])
     
     year_citing, num_citing = get_feature_values(papers_df, citing)
     year_cited, num_cited = get_feature_values(papers_df, cited)
@@ -340,7 +302,7 @@ cols = ['citingpaperID', 'citedpaperID', 'authorID'] + [col for col in df_featur
 df_feature = df_feature[cols]
 
 # sleep()
-df_feature.to_csv(f'out/{database}/all_features.csv',index=False)
+df_feature.to_csv(f'out/all_features.csv',index=False)
 print('all_features.csv saved', len(df_feature))
 print(df_feature.head())
 
