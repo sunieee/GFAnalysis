@@ -48,5 +48,4 @@ else:
     df_papers['paperID'] = df_papers['paperID'].astype(str)
 
 df_papers['PublicationDate'] = pd.to_datetime(df_papers['PublicationDate'])
-paperID2year = dict(zip(df_papers['paperID'].tolist(), df_papers['PublicationDate'].apply(lambda x: x.year).tolist()))
 df_authors = None

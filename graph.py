@@ -3,6 +3,7 @@ from utils import *
 import math
 import multiprocessing
 from tqdm import tqdm
+import json
 
 df_paper_reference = pd.read_csv(f"{path}/paper_reference.csv")
 df_paper_reference['citingpaperID'] = df_paper_reference['citingpaperID'].astype(str)
@@ -51,17 +52,38 @@ with open(f"out/paperID_list.txt", 'w') as f:
     f.write('\n'.join(paperID_list))
 print('nodes & paperID_list saved')
 
-def getYear(paperID, cursor):
-    if paperID in paperID2year:
-        return paperID2year[paperID]
-    
+def getYear(pairs):
+    paperIDs, info = pairs
+    print('extract_paper_years', len(paperIDs), info)
+    paperID_str = ','.join([f'\'{x}\'' for x in paperIDs])
+    conn, cursor = create_connection()
     # 从数据库中查询
-    sql = f"select year(PublicationDate) as year from MACG.papers where paperID = '{paperID}'"
+    sql = f"select paperID, year(PublicationDate) as year from MACG.papers where paperID in ({paperID_str})"
     cursor.execute(sql)
-    result = cursor.fetchone()
-    year = result[0]
-    paperID2year[paperID] = year
-    return year
+    results = cursor.fetchall()
+    return dict(results)
+
+
+if os.path.exists('out/paperID2year.json'):
+    paperID2year = json.load(open('out/paperID2year.json'))
+else:
+    paperID2year = dict(zip(df_papers['paperID'].tolist(), df_papers['PublicationDate'].apply(lambda x: x.year).tolist()))
+
+    citingpaperID_list = [paperID for paperID in df_paper_reference['citingpaperID'].drop_duplicates().tolist() if paperID not in paperID2year]
+
+    multiproces_num = 20
+    group_size = 2000
+    group_length = math.ceil(len(citingpaperID_list)/group_size)
+    groups = [(citingpaperID_list[i*group_size:i*group_size+group_size], f'{i}/{group_length}') for i in range(group_length)]
+    with multiprocessing.Pool(processes=multiproces_num) as pool:
+        results = pool.map(getYear, groups)
+        for result in results:
+            paperID2year.update(result)
+
+    with open('out/paperID2year.json', 'w') as f:
+        json.dump(paperID2year, f)
+
+
 
 def getTimeseries(paperIDs):
     data = []
@@ -70,7 +92,7 @@ def getTimeseries(paperIDs):
         print(paperID)
         citing_papers = df_paper_reference[df_paper_reference['citedpaperID'] == paperID]['citingpaperID'].tolist()
         # 不仅包含作者自己的引用，还有其他作者的引用!!!
-        citing_years = [getYear(paperID, cursor) for paperID in citing_papers]
+        citing_years = [paperID2year[paperID] for paperID in citing_papers]
         if len(citing_years) == 0:
             continue
 
