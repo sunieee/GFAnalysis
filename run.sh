@@ -2,6 +2,8 @@
 
 mkdir -p out/{papers_raw,papers,links,log}
 
+python extract_fellow.py
+
 python compute_key_papers.py > out/log/compute_key_papers.log
 python update_papers.py > out/log/update_papers.log
 

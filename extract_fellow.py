@@ -2,7 +2,10 @@ import pymysql
 import pandas as pd
 from tqdm import tqdm
 import json
+import re
 
+# typ = 1 # ACMFellow: https://awards.acm.org/fellows/award-winners
+typ = 10 # A.M. Turing Award: https://amturing.acm.org/byyear.cfm
 
 # 连接数据库
 try:
@@ -15,32 +18,59 @@ except pymysql.MySQLError as e:
     print("Error: Unable to connect to the database")
     print(e)
 
+
+def format_name(name):
+    name = name.strip('* .')
+    name = re.sub(r"\s*\([^)]*\)", "", name).strip()
+    parts = name.split(',')
+    if len(parts) == 1:
+        return name
+    a, b = parts
+    c = ''
+    for ix, t in enumerate(b.split()):
+        if ix >= 1:
+            c += t[0] + '. '
+        elif len(t) == 1:
+            c += t + '. '
+        else:
+            c += t + ' '
+    return c + a
+    
+
+#####################################################3
+# 1. 读取网页获奖者名单
 name2year = {}
-with open('out/fellow.txt') as f:
-    for line in f.read().split('\n'):
-        name = line.split('ACM Fellows')[0].strip()
-        a, b = name.split(', ')
-        c = ''
-        for t in b.split():
-            if len(t) == 1:
-                c += t + '. '
-            else:
-                c += t + ' '
-        name = c + a
-        year = int(line.split('ACM Fellows')[-1].strip().split()[0])
-        name2year[name] = year
-print(name2year)
-# save name2year
+if typ == 1:
+    with open('out/fellow.txt') as f:
+        for line in f.read().strip().split('\n'):
+            name = format_name(line.split('ACM Fellows')[0])
+            year = int(line.split('ACM Fellows')[-1].strip().split()[0])
+            name2year[name] = year
+elif typ == 10:
+    with open('out/turing.txt') as f:
+        lines = f.read().strip().split('\n')
+    for i in range(0, len(lines)):
+        line = lines[i].strip()
+        if line.startswith('(') and line.endswith(')'):
+            year = int(line.strip("()"))  # Extracting the year
+        else:
+            name = format_name(line)
+            name2year[name] = year
 
-with open('out/name2year.json', 'w') as f:
-    json.dump(name2year, f)
+print('name2year:', name2year)
+
+############################################################
+# 2. 读取数据集获奖者
+award_df = pd.read_csv('out/award_authors.csv')
+award_df = award_df[award_df['type'] == typ]
+award_df['MAGID'] = award_df['MAGID'].astype(str).apply(lambda x: x.split('.')[0])
+ids = award_df['MAGID'].unique()
+print('valid MAGID in award_authors.csv', len(ids))
 
 
-award_df = pd.read_csv('award_authors.csv')
-award_df = award_df[award_df['type'] == 1]
-ids = [str(x).split('.')[0] for x in award_df['MAGID'].unique()]
-
-# 查询并选出PaperCount最高的3个且大于10的ACM Fellows
+###########################################################
+# 3. （使用网页数据）查询并选出PaperCount最高的3个且大于10的ACM Fellows
+id2year = {}
 results = []
 valid_names = []
 for name in tqdm(name2year.keys()):
@@ -48,9 +78,8 @@ for name in tqdm(name2year.keys()):
         with conn.cursor() as cur:
             query = f"""
                 SELECT * FROM MACG.authors
-                WHERE name="{name}" AND PaperCount > 10 AND CitationCount > 100
-                ORDER BY PaperCount DESC
-                LIMIT 3;
+                WHERE name="{name}" AND PaperCount >= 20 AND CitationCount >= 500
+                ORDER BY PaperCount DESC;
             """
             # print(query)
             cur.execute(query)
@@ -58,10 +87,18 @@ for name in tqdm(name2year.keys()):
             results.extend(ret)
             if len(ret) > 0:
                 valid_names.append(name)
+
+            for row in ret:
+                id2year[str(row[0])] = name2year[name]
     except pymysql.MySQLError as e:
         print(f"Error querying database for {name}")
         print(e)
 
+
+############################################################
+# 4. 添加数据集数据，获取所有作者信息
+print('len(valid_names):', len(valid_names))
+id2year.update(zip(award_df['MAGID'], award_df['year']))
 name2id = {}
 for id in tqdm(ids):
     try:
@@ -79,17 +116,15 @@ for id in tqdm(ids):
     except pymysql.MySQLError as e:
         print(f"Error querying database for {id}")
         print(e)
-
-# 关闭数据库连接
 conn.close()
 
-# 创建DataFrame并显示结果
-# 注意：这里的列名应该与您的数据库表的实际列名相匹配
+########################################################
+# 5. 创建DataFrame并显示结果
 df = pd.DataFrame(results, columns=['authorID', 'rank', 'name', 'PaperCount', 'CitationCount'])
+df['authorID'] = df['authorID'].astype(str)
 df.sort_values(by=['name'], inplace=True, ascending=True)
 
 for name in name2id.keys():
-    # 删除name相同而id不同的行
     df.drop(df[(df['name'] == name) & (df['authorID'] != name2id[name])].index, inplace=True)
 
 df.drop_duplicates(subset=['authorID'], keep='first', inplace=True)
@@ -113,7 +148,17 @@ df = df.groupby('name').apply(filter_group).reset_index(drop=True)
 df['CitationCount'] = df['CitationCount'].astype(int)
 df['PaperCount'] = df['PaperCount'].astype(int)
 df['rank'] = df['rank'].astype(int)
-df['year'] = df['name'].apply(lambda x: name2year.get(x, 0))
-df.to_csv('out/fellow.csv', index=False)
+df['year'] = df['authorID'].apply(lambda x: id2year[x] if x in id2year else 0)
 
-print('len(valid_names):', len(valid_names))
+if typ == 1:
+    df.to_csv('out/fellow.csv', index=False)
+elif typ == 10:
+    df.to_csv('out/turing.csv', index=False)
+
+award_df = pd.DataFrame(columns=['original_author_name', 'year', 'type', 'MAGID', 'ARCID'])
+for row in df.iterrows():
+    row = row[1]
+    if row['authorID'] not in ids:
+        award_df.loc[len(award_df)] =[row['name'], row['year'], typ, row['authorID'], 'NULL']
+
+award_df.to_csv(f'out/award_authors_add{typ}.csv', index=False)

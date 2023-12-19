@@ -39,6 +39,7 @@ paperID_list = df_paper_author['paperID'].drop_duplicates().tolist()
 paperID2referenceCount = dict(zip(df_papers['paperID'], df_papers['referenceCount']))
 paperID2citationCount = dict(zip(df_papers['paperID'], df_papers['citationCount']))
 
+timeseries_df = pd.read_csv(f'out/timeseries.csv')
 
 def extract_paper_abstract(pairs):
     papers, info = pairs
@@ -160,20 +161,24 @@ with multiprocessing.Pool(processes=multiproces_num) as pool:
         paperID2authorsName.update(result)
 print('finish extract_paper_authors', len(paperID2authorsName), datetime.datetime.now().strftime('%H:%M:%S'))
 
+
+timeseries = pd.read_csv('timeseries.csv')
 def extract_paper(file):
     filepath = os.path.join(paper_dir, file)
     papers = pd.read_csv(filepath)
-    for col in ["authorOrder", "firstAuthorID", "firstAuthorName"]:
-        try:
+    for col in ["authorOrder", "firstAuthorID", "firstAuthorName"] + \
+        ['citeStartYear','citeEndYear','totalCitationCount','citationCountByYear']:
+        if col in papers.columns:
             papers = papers.drop(columns=[col])
-        except:
-            pass
+
     papers['paperID'] = papers['paperID'].astype(str)
     papers['referenceCount'] = papers['paperID'].apply(lambda paperID: paperID2referenceCount[paperID])
     papers['citationCount'] = papers['paperID'].apply(lambda paperID: paperID2citationCount[paperID])
     papers['venu'] = papers['paperID'].apply(lambda paperID: paperID2venue[paperID])
     papers['authorsName'] = papers['paperID'].apply(lambda paperID: paperID2authorsName[paperID])
     papers['abstract'] = papers['paperID'].apply(lambda paperID: paperID2abstract.get(paperID, ''))
+    # papers = papers.merge(timeseries_df, on='paperID')
+    papers = papers.merge(timeseries, on='paperID', how='left')
 
     papers.to_csv(f'out/papers/' + filepath.split('/')[-1], index=False)
 
@@ -188,7 +193,9 @@ def extract_paper(file):
         'hIndex': sum(1 for i, citation in enumerate(citations) if citation > i),
         'CorePaperCount': len(core_papers),
         'CoreCitationCount': core_papers['citationCount'].sum(),
-        'CorehIndex': sum(1 for i, citation in enumerate(core_citations) if citation > i)
+        'CorehIndex': sum(1 for i, citation in enumerate(core_citations) if citation > i),
+        'PaperCount': len(papers),
+        'CitationCount': papers['citationCount'].sum(),
     }
 
 multiproces_num = 20
@@ -197,9 +204,14 @@ with multiprocessing.Pool(processes=multiproces_num) as pool:
 
 df = pd.DataFrame(results)
 # remove columns in top_authors if exist: ['CorePaperCount', 'CoreCitationCount', 'CorehIndex']
-for col in ['CorePaperCount', 'CoreCitationCount', 'CorehIndex']:
+for col in ['CorePaperCount', 'CoreCitationCount', 'CorehIndex', 'PaperCount', 'CitationCount']:
     if col in top_authors.columns:
         top_authors = top_authors.drop(columns=[col])
 top_authors = top_authors.merge(df, on='authorID')
 
 top_authors.to_csv(f'out/top_authors.csv', index=False)
+
+top_authors.drop(columns=['compareAuthorID','deviation'], inplace=True)
+top_authors.drop_duplicates(inplace=True)
+
+top_authors.to_csv('top_field_authors.csv', index=False)
